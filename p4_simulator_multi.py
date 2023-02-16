@@ -56,7 +56,7 @@ fb_coflow_priority = {}
 
 class Switch:
     # Queue
-    coflow_queue = {} # Coflow_ID(key), [Flows_List, Real_Coflow_ID] #v
+    coflow_queue = {} # Classified Coflow_ID(key), [[Flows_List], [Real_Coflow_ID]] #v
     input_queue = [] #v
     output_queue = []
     wait_queue = PriorityQueue()
@@ -66,7 +66,7 @@ class Switch:
     packet_count_table = [[0 for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
     flow_size_table = [[0 for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
     flow_record_table = {} # (in Controller) Flow_ID(key), Coflow_ID, Priority, Size, TTL, Arrival_Time, Size_m, Finish #v
-    coflow_priority_table = {} # (in Controller) Coflow_ID(key), Coflow_Size, Priority
+    coflow_priority_table = {} # (in Controller) Classified Coflow_ID(key), Coflow_Size, Priority
     # Other
     DNN_counter = 0
     DNN_right = 0
@@ -314,7 +314,7 @@ def classify(switch, f_id, packet, packet_m, arrival_t):
         sameScore.append(0)
         diffScore.append(0)
         cnt = 0
-        sampleNum = min(len(switch.coflow_queue[sorted_coflow_keys[i]][0]), 20)
+        sampleNum = min(len(switch.coflow_queue[sorted_coflow_keys[i]][0]), 20) #min(num of flows in queue, 20)
         sampleList = random.sample(range(len(switch.coflow_queue[sorted_coflow_keys[i]][0])), sampleNum)
         for j in sampleList: # Each flow in coflow
             if switch.coflow_queue[sorted_coflow_keys[i]][0][j] not in switch.flow_record_table.keys():
@@ -373,62 +373,6 @@ def label(packet,c_list,percentage):
                 cid = random.choice(c_list)
         return cid
 
-def intra_classify(switch, f_id, packet, packet_m, arrival_t):
-    def normalize(switch, f_id2, packet_m, arrival_t):
-        feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
-        normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
-        normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
-        return np.array([[feature_time, normalize_packet1, normalize_packet2]])
-    if len(switch.coflow_queue.keys()) == 0: # Create a new queue
-        return packet[0] # Real coflow ID
-    sameScore = []
-    diffScore = []
-    sorted_coflow_keys = sorted(switch.coflow_queue.keys())
-    for i in range(len(sorted_coflow_keys)):
-        sameScore.append(0)
-        diffScore.append(0)
-        cnt = 0
-        sampleNum = min(len(switch.coflow_queue[sorted_coflow_keys[i]][0]), 20)
-        sampleList = random.sample(range(len(switch.coflow_queue[sorted_coflow_keys[i]][0])), sampleNum)
-        for j in sampleList: # Each flow in coflow
-            if switch.coflow_queue[sorted_coflow_keys[i]][0][j] not in switch.flow_record_table.keys():
-                continue
-            n = normalize(switch, switch.coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
-            result = MODEL.predict_proba(n)
-            sameScore[i] += result[0][1]
-            diffScore[i] += result[0][0]
-            cnt += 1
-            # ------ Record ------
-            switch.DNN_counter += 1
-            if packet[0] == switch.coflow_queue[sorted_coflow_keys[i]][1][j] and result[0][1] > result[0][0]:
-                switch.DNN_right += 1
-            if packet[0] != switch.coflow_queue[sorted_coflow_keys[i]][1][j] and result[0][1] <= result[0][0]:
-                switch.DNN_right += 1
-            # ------ Record ------
-        if cnt > 0:
-            sameScore[i] /= cnt
-            diffScore[i] /= cnt
-    score = [-1, -1] # [c_id, Max Score]
-    for i in range(len(sorted_coflow_keys)):
-        if sameScore[i] > diffScore[i]:
-            if sameScore[i] > score[1]:
-                score[1] = sameScore[i]
-                score[0] = sorted_coflow_keys[i]
-    if score[1] == -1: # No friend and create a new job
-        if len(switch.coflow_queue.keys()) < COFLOW_TABLE_SIZE:
-            c_id = packet[0] # Real coflow ID
-        else:
-            # Find the smallest coflow
-            small = [0, sys.maxsize] # [c_id, #]
-            for i in range(len(sorted_coflow_keys)):
-                if len(switch.coflow_queue[sorted_coflow_keys[i]][0]) < small[1]:
-                    small[0] = sorted_coflow_keys[i]
-                    small[1] = len(switch.coflow_queue[sorted_coflow_keys[i]][0])
-            c_id = small[0] # Smallest coflow ID
-    else:
-        c_id = score[0] # Existing coflow ID
-    return c_id
-
 def updateFlowRecordTable(switch, f_id, c_list, packet):
     #flow_record_table
     #                                 0          1        2    3         4         5       6
@@ -472,9 +416,9 @@ def updateFlowRecordTable(switch, f_id, c_list, packet):
             switch.flow_record_table[f_id][2] = size
             switch.flow_record_table[f_id][5] = packet_m
         arrival_t = switch.flow_record_table[f_id][4]
-        #c_id = classify(f_id, packet, packet_m, arrival_t)
+        c_id = classify(switch, f_id, packet, packet_m, arrival_t)
         #label manually with some error probability
-        c_id = label(packet, c_list, 80)
+        #c_id = label(packet, c_list, 80)
         print(c_id)
         # ------ Record ------
         real_coflow_id = packet[0]
@@ -492,11 +436,11 @@ def updateFlowRecordTable(switch, f_id, c_list, packet):
             switch.coflow_queue[c_id][0].append(f_id)
             switch.coflow_queue[c_id][1].append(packet[0]) # Real coflow id of this flow 
         else:
-            switch.coflow_queue[c_id] = [[f_id],[packet[0]]]
+            switch.coflow_queue[c_id] = [[f_id],[packet[0]]] #new queue
         if c_id in switch.coflow_priority_table.keys(): # Update priority
             priority = switch.coflow_priority_table[c_id][1]
         else: # New coflow
-            switch.coflow_priority_table[c_id] = [0, 0]
+            switch.coflow_priority_table[c_id] = [0, 0] #size, priority
         # Update Flow Table
         switch.flow_record_table[f_id][0] = c_id
         switch.flow_record_table[f_id][1] = priority
@@ -626,8 +570,9 @@ if __name__ == "__main__":
     print(len(c_list), " coflows, ", len(f_id_list), " flows and ", len(input_queue), " packets")
 
     #sampling
+    sample_limit = 200000
     sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
-    while len(sample_input_queue)>200000:
+    while len(sample_input_queue)>sample_limit:
         sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
     print("After sampling: ")
     print(len(sample_c_list), " coflows, ", len(sample_f_id_list), " flows and ", len(sample_input_queue), " packets")
