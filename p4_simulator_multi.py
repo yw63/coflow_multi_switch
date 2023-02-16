@@ -356,8 +356,72 @@ def classify(switch, f_id, packet, packet_m, arrival_t):
         c_id = score[0] # Existing coflow ID
     return c_id
 
-def cross_classify():
-    return
+def intra_classify(switch, f_id, packet, packet_m, arrival_t):
+    def normalize(f_id2, packet_m, arrival_t):
+        feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
+        normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
+        normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
+        return np.array([[feature_time, normalize_packet1, normalize_packet2]])
+    if len(switch.coflow_queue.keys()) == 0: # Create a new queue
+        return packet[0] # Real coflow ID
+    sameScore = []
+    diffScore = []
+    sorted_coflow_keys = sorted(switch.coflow_queue.keys())
+    for i in range(len(sorted_coflow_keys)):
+        sameScore.append(0)
+        diffScore.append(0)
+        cnt = 0
+        sampleNum = min(len(switch.coflow_queue[sorted_coflow_keys[i]][0]), 20) #min(num of flows in queue, 20)
+        sampleList = random.sample(range(len(switch.coflow_queue[sorted_coflow_keys[i]][0])), sampleNum)
+        for j in sampleList: # Each flow in coflow
+            if switch.coflow_queue[sorted_coflow_keys[i]][0][j] not in switch.flow_record_table.keys():
+                continue
+            n = normalize(switch.coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
+            predict_prob = MODEL.predict(n)
+            predict_classes = predict_prob[0]
+            sameScore[i] += predict_classes[1]
+            diffScore[i] += predict_classes[0]
+            cnt += 1
+            # ------ Record ------
+            switch.DNN_counter += 1
+            if packet[0] == switch.coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] > predict_classes[0]:
+                switch.DNN_right += 1
+            if packet[0] != switch.coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] <= predict_classes[0]:
+                switch.DNN_right += 1
+            # ------ Record ------
+        if cnt > 0:
+            sameScore[i] /= cnt
+            diffScore[i] /= cnt
+    score = [-1, -1] # [c_id, Max Score]
+    for i in range(len(sorted_coflow_keys)):
+        if sameScore[i] > diffScore[i]:
+            if sameScore[i] > score[1]:
+                score[1] = sameScore[i]
+                score[0] = sorted_coflow_keys[i]
+    if score[1] == -1: # No friend and create a new job
+        if len(switch.coflow_queue.keys()) < COFLOW_TABLE_SIZE:
+            c_id = packet[0] # Real coflow ID
+        else:
+            # Find the smallest coflow
+            small = [0, sys.maxsize] # [c_id, #]
+            for i in range(len(sorted_coflow_keys)):
+                if len(switch.coflow_queue[sorted_coflow_keys[i]][0]) < small[1]:
+                    small[0] = sorted_coflow_keys[i]
+                    small[1] = len(switch.coflow_queue[sorted_coflow_keys[i]][0])
+            c_id = small[0] # Smallest coflow ID
+    else:
+        c_id = score[0] # Existing coflow ID
+    return c_id
+
+def groundtruth(switch, real_cid):
+    result = {}
+    for key in switch.coflow_queue.keys():
+        result[key] = 0
+    for key in switch.coflow_queue.keys():
+        for cid in switch.coflow_queue[key][1]:
+            if cid == real_cid:
+                result[key]+=1
+    return result
 
 #label manually with some error probability
 def label(packet,c_list,percentage):
@@ -373,7 +437,7 @@ def label(packet,c_list,percentage):
                 cid = random.choice(c_list)
         return cid
 
-def updateFlowRecordTable(switch, f_id, c_list, packet):
+def updateFlowRecordTable(switches, switch, f_id, c_list, packet):
     #flow_record_table
     #                                 0          1        2    3         4         5       6
     #(in Controller) Flow_ID(key), Coflow_ID, Priority, Size, TTL, Arrival_Time, Size_m, Finish
@@ -417,8 +481,11 @@ def updateFlowRecordTable(switch, f_id, c_list, packet):
             switch.flow_record_table[f_id][5] = packet_m
         arrival_t = switch.flow_record_table[f_id][4]
         c_id = classify(switch, f_id, packet, packet_m, arrival_t)
+        intra_classify_cid = intra_classify(switches[1-switches.index(switch)], f_id, packet, packet_m, arrival_t)
+
         #label manually with some error probability
         #c_id = label(packet, c_list, 80)
+
         print(c_id)
         # ------ Record ------
         real_coflow_id = packet[0]
@@ -450,6 +517,14 @@ def updateFlowRecordTable(switch, f_id, c_list, packet):
         else:
             print("(Priority Table) Overflow")
             # Todo
+        
+        #calculate major and minor classify accuracy via groundtruth
+        major_groundtruth = groundtruth(switch, packet[0]) #input real coflow id to find groundtruth
+        minor_groundtruth = groundtruth(switches[1-switches.index(switch)], packet[0])
+        print("major_groundtruth: ", major_groundtruth)
+        print("minor_groundtruth: ", minor_groundtruth)
+        print("major accuracy =", major_groundtruth[c_id]/sum(major_groundtruth.values())*100, "%")
+        print("minor accuracy =", minor_groundtruth[intra_classify_cid]/sum(minor_groundtruth.values())*100, "%")
 
 def schedule(table):
     for c_id in table.keys():
@@ -570,7 +645,7 @@ if __name__ == "__main__":
     print(len(c_list), " coflows, ", len(f_id_list), " flows and ", len(input_queue), " packets")
 
     #sampling
-    sample_limit = 200000
+    sample_limit = 100000
     sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
     while len(sample_input_queue)>sample_limit:
         sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
@@ -586,6 +661,7 @@ if __name__ == "__main__":
     switches = grouping(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, numOfSwitches)
     for switch in switches:
         print(len(switch.input_queue))
+        print(switch.input_queue[:10])
 
     packet_index=-1
     while True:
@@ -612,7 +688,7 @@ if __name__ == "__main__":
                 updateFlowSizeTable(switch, f_id, this_packet)
                 # New flow or Packet full, inform controller
                 if not find and action:
-                    updateFlowRecordTable(switch, f_id, sample_c_list, this_packet)
+                    updateFlowRecordTable(switches, switch, f_id, sample_c_list, this_packet)
                 #print("flow record table: ", switch.flow_record_table)
                 # Controller update
                 if counter % CONTROLLER_UPDATE_TIME == 0 or packet_index == len(switch.input_queue)-1:
