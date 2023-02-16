@@ -3,21 +3,20 @@ import csv
 import os
 import random
 import json
-import tensorflow as tf
-import tensorflow.keras as keras
 from keras.models import load_model
 import sys
 import time
 import math
+from queue import PriorityQueue
 
 # Parameter
 INPUT_PATH = "./CSV/"
 INPUT_FBFILE_PATH = "./FB2010-1Hr-150-0.txt"
 INPUT_MODEL = "./Coflow_model_select.h5"
 INPUT_MINMAX = "./min_max.json"
-OUTPUT_CSV = "./P4_RECORD/priority_table_size.csv"
-OUTPUT_ACCURACY = "./P4_RECORD/classify_record.csv"
-OUTPUT_COMPLETION_TIME = "./P4_RECORD/coflow_completion_time.csv"
+OUTPUT_CSV = "./P4_RECORD/sampleAndLabel_priority_table_size.csv"
+OUTPUT_ACCURACY = "./P4_RECORD/sampleAndLabel_classify_record.csv"
+OUTPUT_COMPLETION_TIME = "./P4_RECORD/sampleAndLabel_coflow_completion_time.csv"
 
 
 with open(INPUT_MINMAX) as file_object:
@@ -26,7 +25,7 @@ with open(INPUT_MINMAX) as file_object:
     max_data = np.array(min_max['max_num'])
 
 MODEL = load_model(INPUT_MODEL)
-COFLOW_NUMBER = 10
+# COFLOW_NUMBER = 100
 # FLOW_NUMBER = 10000 
 CONTROLLER_UPDATE_TIME = 30
 SKETCH_DEPTH = 3
@@ -49,42 +48,40 @@ PACKET_CNT_TABLE_SIZE = 512
 FLOW_SIZE_TABLE_SIZE = PACKET_CNT_TABLE_SIZE * 4
 COFLOW_TABLE_SIZE = 10
 
+counter = 0
 # Data Set
 fb_data = {}
 fb_coflow_size = {}
 fb_coflow_priority = {}
 
-# Queue
-coflow_queue = {} # Coflow_ID(key), [Flows_List, Real_Coflow_ID]
-input_queue = []
-output_queue = []
-wait_queue = []
+class Switch:
+    # Queue
+    coflow_queue = {} # Coflow_ID(key), [Flows_List, Real_Coflow_ID] #v
+    input_queue = [] #v
+    output_queue = []
+    wait_queue = PriorityQueue()
 
-# Table
-priority_table = {} # (Match Table) Flow_ID(key), Priority
-packet_count_table = [[0 for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count
-flow_size_table = [[0 for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count
-flow_record_table = {} # (in Controller) Flow_ID(key), Coflow_ID, Priority, Size, TTL, Arrival_Time, Size_m, Finish
-coflow_priority_table = {} # (in Controller) Coflow_ID(key), Coflow_Size, Priority
-# Other
-counter = 0
-DNN_counter = 0
-DNN_right = 0
-sketch_flow_size = {}
-sketch_cnt_err = 0
-sketch_size_err = 0
-sketch_mean_err = 0
-sketch_counter = 0
-priority_table_time = []
-priority_table_size = []
-packet_collision = [[[] for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)]
-flow_collision = [[[] for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)]
-pkt_collision_counter = 0
-flow_collision_counter = 0 
-coflow_completion = {} # Coflow ID(key), Start Time, Completion Time, Duration Time, Coflow Size, Coflow Priority
-with open(OUTPUT_ACCURACY, "w", newline="") as csvfile:
-    writer = csv.writer(csvfile)
-    writer.writerow(["Flow ID", "Real Coflow ID", "Classified Coflow ID", "Real Size", "Classified Size", "Real Priority", "Classified Priority"])
+    # Table
+    priority_table = {} # (Match Table) Flow_ID(key), Priority #v
+    packet_count_table = [[0 for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
+    flow_size_table = [[0 for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
+    flow_record_table = {} # (in Controller) Flow_ID(key), Coflow_ID, Priority, Size, TTL, Arrival_Time, Size_m, Finish #v
+    coflow_priority_table = {} # (in Controller) Coflow_ID(key), Coflow_Size, Priority
+    # Other
+    DNN_counter = 0
+    DNN_right = 0
+    sketch_flow_size = {} #v
+    sketch_cnt_err = 0 #v
+    sketch_size_err = 0 #v
+    sketch_mean_err = 0 #v
+    sketch_counter = 0 #v
+    priority_table_time = []
+    priority_table_size = []
+    packet_collision = [[[] for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] #v
+    flow_collision = [[[] for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] #v
+    pkt_collision_counter = 0 #v
+    flow_collision_counter = 0 #v
+    coflow_completion = {} # Coflow ID(key), Start Time, Completion Time, Duration Time, Coflow Size, Coflow Priority
 
 def readDataSet():
     global fb_data, fb_coflow_size, fb_coflow_priority
@@ -128,76 +125,6 @@ def readDataSet():
     # print(fb_coflow_priority)
     # print(fb_coflow_size)
 
-def loadcsvpartial():
-    def sortDir(s):
-        return int(s.split("_")[0])
-    input_data = []
-    input_data_flow = {}
-    f_cnt = 0
-    c_list = []
-    """"
-    csv_dir = ["./CSV/1_30_M1000_50_V10_1_420_delay",
-                "./CSV/31_50_M1000_50_V10_1_420_delay",
-                "./CSV/51_70_M1000_50_V10_1_420_delay",
-                "./CSV/71_90_M1000_50_V10_1_420_delay",
-                "./CSV/91_120_M1000_50_V10_1_420_delay"]
-    """
-    csv_dir = sorted(os.listdir(INPUT_PATH), key=sortDir) # Sort
-    count = 0
-    for f1 in csv_dir: # Packet dir
-        count += 1
-        if count > 5:
-            break
-        print("open ", f1)
-        for f2 in sorted(os.listdir(os.path.join(INPUT_PATH, f1))): # Host file
-            print(f2, end=" ")
-            data = np.loadtxt(os.path.join(os.path.join(INPUT_PATH, f1), f2), dtype=float, delimiter=",", skiprows=1, usecols=range(8))
-            for i in range(len(data)): # Packets
-                c_id = data[i][0] #coflow id
-                m_id = data[i][3] #mapper id
-                r_id = data[i][4] #reducer id
-                key = str(c_id) + "-" + str(m_id) + "-" + str(r_id)
-                if c_id not in c_list:
-                    if len(c_list) >= COFLOW_NUMBER:
-                        continue
-                    c_list.append(c_id)
-                if key not in input_data_flow.keys():
-                    if key not in fb_data.keys() or data[i][7] == 0:
-                        continue
-                    # if f_cnt >= FLOW_NUMBER:
-                    #     continue
-                    f_cnt += 1
-                    input_data_flow[key] = []
-                input_data_flow[key].append(data[i])
-            for key in input_data_flow.keys():
-                num = (fb_data[key] / input_data_flow[key][0][7])
-                if len(input_data_flow[key]) < num:
-                    orgin_len = len(input_data_flow[key])
-                    while len(input_data_flow[key]) < num:
-                        tmp_input = input_data_flow[key].copy()
-                        for d in tmp_input:
-                            if len(input_data_flow[key]) < num:
-                                input_data_flow[key].append(d)
-                            else:
-                                break
-                    add = 0
-                    inter = random.sample([1, 2, 3, 4, 6, 7, 8], 1)[0]
-                    for i in range(len(input_data_flow[key])-orgin_len):
-                        if (orgin_len + i) % inter == 0:
-                            add += 1
-                        input_data_flow[key][orgin_len + i][5] += add
-        print("")
-        # if f_cnt >= FLOW_NUMBER:
-        #     break
-        if len(c_list) >= COFLOW_NUMBER:
-            break
-    for key in input_data_flow.keys():
-        for d in input_data_flow[key]:
-            input_data.append(d)
-    input_data = sorted(input_data, key=lambda s:s[5])
-    f_id_list = input_data_flow.keys()
-    return input_data, input_data_flow, f_id_list, c_list
-
 def loadCsvData():
     def sortDir(s):
         return int(s.split("_")[0])
@@ -217,8 +144,8 @@ def loadCsvData():
                 r_id = data[i][4] #reducer id
                 key = str(c_id) + "-" + str(m_id) + "-" + str(r_id)
                 if c_id not in c_list:
-                    if len(c_list) >= COFLOW_NUMBER:
-                        continue
+                    #if len(c_list) >= COFLOW_NUMBER:
+                    #    continue
                     c_list.append(c_id)
                 if key not in input_data_flow.keys():
                     if key not in fb_data.keys() or data[i][7] == 0:
@@ -248,14 +175,52 @@ def loadCsvData():
         print("")
         # if f_cnt >= FLOW_NUMBER:
         #     break
-        if len(c_list) >= COFLOW_NUMBER:
-            break
+        # if len(c_list) >= COFLOW_NUMBER:
+        #    break
     for key in input_data_flow.keys():
         for d in input_data_flow[key]:
             input_data.append(d)
     input_data = sorted(input_data, key=lambda s:s[5])
     f_id_list = input_data_flow.keys()
     return input_data, input_data_flow, f_id_list, c_list
+
+def sampling(k):
+    shuffle_c_list = sorted(c_list)
+    random.shuffle(shuffle_c_list)
+    sample_c_list = shuffle_c_list[:10]
+    sample_f_id_list = []
+    for cid in sample_c_list:
+        for fid in f_id_list:
+            if(fid.split('-',1)[0] == str(cid)):
+                sample_f_id_list.append(fid)
+    set_sample_fid_list = set(sample_f_id_list)
+    sample_input_data_flow = input_data_flow.copy()
+    for key in input_data_flow:
+        if key not in set_sample_fid_list:
+            sample_input_data_flow.pop(key)
+    sample_input_queue = []
+    for item in input_queue:
+        fid = str(item[0]) + "-" + str(item[3]) + "-" + str(item[4])
+        if fid in set_sample_fid_list:
+            sample_input_queue.append(item)
+    return sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list
+
+def grouping(switches, sample_input_queue, sample_input_flow, sample_f_id_list, k):
+    shuffle_fid = sample_f_id_list
+    random.shuffle(shuffle_fid)
+    shuffle_fid_list = np.array_split(shuffle_fid, k)
+    shuffle_fid_list_sets = []
+    for fid_list in shuffle_fid_list:
+        shuffle_fid_list_sets.append(set(fid_list))
+    switch_datas = [[]for i in range(k)]
+    for item in sample_input_queue:
+        key = str(item[0]) + "-" + str(item[3]) + "-" + str(item[4])
+        for fid_list_set in shuffle_fid_list_sets:
+            if key in fid_list_set:
+                switch_datas[shuffle_fid_list_sets.index(fid_list_set)].append(item)
+    for switch in switches:
+        switch.input_queue = switch_datas[switches.index(switch)]
+    return switches
 
 def getFlowID(packet, f_id_list):
     c_id = packet[0]
@@ -264,11 +229,20 @@ def getFlowID(packet, f_id_list):
     key = str(c_id) + "-" + str(m_id) + "-" + str(r_id)
     return list(f_id_list).index(key)
 
+def checkPriorityTable(switch, f_id, packet):
+    find = False
+    if f_id in switch.priority_table.keys():
+        packet.append(switch.priority_table[f_id]) # Add priority
+        find = True
+    else:
+        packet.append(0) # Add highest priority
+    return find, packet
+
 def hash(key, width, depth):
     h = (key+(depth+1)**(depth)) % width
     return h
 
-def sketchAction(f_id, table, add_value, clear=False):
+def sketchAction(switch, f_id, table, add_value, clear=False):
     global packet_collision, flow_collision, pkt_collision_counter, flow_collision_counter
     get_value = []
     for i in range(SKETCH_DEPTH):
@@ -278,93 +252,85 @@ def sketchAction(f_id, table, add_value, clear=False):
         if clear:
             table[i][key] = 0
         # ------ Record ------
-        if table == packet_count_table: # Add packet count
+        if table == switch.packet_count_table: # Add packet count
             if add_value != 0:
-                if f_id not in packet_collision[i][key]:
-                    if packet_collision[i][key] != []:
-                        pkt_collision_counter += 1
-                        print("Packet Count Collision - table ", i, ": ", f_id, " and ", packet_collision[i][key])
-                    packet_collision[i][key].append(f_id)
+                if f_id not in switch.packet_collision[i][key]:
+                    if switch.packet_collision[i][key] != []:
+                        switch.pkt_collision_counter += 1
+                        print("Packet Count Collision - table ", i, ": ", f_id, " and ", switch.packet_collision[i][key])
+                    switch.packet_collision[i][key].append(f_id)
+                    print("put fid into packet collision table[",i,"][",key,"]")
             if clear == True:
                 # print(packet_collision[i][key])
-                if f_id in packet_collision[i][key]:
-                    packet_collision[i][key].remove(f_id)
+                if f_id in switch.packet_collision[i][key]:
+                    switch.packet_collision[i][key].remove(f_id)
                 # print("Clear key in packte size: ", f_id)
-        elif table == flow_size_table: # Add flow size
+        elif table == switch.flow_size_table: # Add flow size
             if add_value != 0:
-                if f_id not in flow_collision[i][key]:
-                    if flow_collision[i][key] != []:
-                        flow_collision_counter += 1
-                        print("Flow Size Collision - table ", i, ": ", f_id, " and ", flow_collision[i][key])
-                    flow_collision[i][key].append(f_id)                        
+                if f_id not in switch.flow_collision[i][key]:
+                    if switch.flow_collision[i][key] != []:
+                        switch.flow_collision_counter += 1
+                        print("Flow Size Collision - table ", i, ": ", f_id, " and ", switch.flow_collision[i][key])
+                    switch.flow_collision[i][key].append(f_id) 
+                    print("put fid into flow collision table[",i,"][",key,"]")
             if clear == True:
                 # print(flow_collision[i][key])
-                if f_id in flow_collision[i][key]:
-                    flow_collision[i][key].remove(f_id)
+                if f_id in switch.flow_collision[i][key]:
+                    switch.flow_collision[i][key].remove(f_id)
                 # print("Clear key in flow size: ", f_id)
         # ------ Record ------
     return min(get_value)
 
-def checkPriorityTable(f_id, packet):
-    find = False
-    if f_id in priority_table.keys():
-        packet.append(priority_table[f_id]) # Add priority
-        find = True
-    else:
-        packet.append(0) # Add highest priority
-    return find, packet
-
-def updatePacketCntTable(f_id, packet):
-    cnt = sketchAction(f_id, packet_count_table, 1, False)
+def updatePacketCntTable(switch, f_id, packet):
+    cnt = sketchAction(switch, f_id, switch.packet_count_table, 1, False)
     if cnt == 1 or cnt == PACKET_CNT_THRESHOLD: 
         return True
     else:
         return False
-
-def updateFlowSizeTable(f_id, packet):
+    
+def updateFlowSizeTable(switch, f_id, packet):
     global sketch_flow_size
-    size = sketchAction(f_id, flow_size_table, packet[6], False)
+    size = sketchAction(switch, f_id, switch.flow_size_table, packet[6], False)
     # Record
-    if f_id not in sketch_flow_size.keys():
-        sketch_flow_size[f_id] = []
-    if len(sketch_flow_size[f_id]) < PACKET_CNT_THRESHOLD:
-        sketch_flow_size[f_id].append(packet[6])
+    if f_id not in switch.sketch_flow_size.keys():
+        switch.sketch_flow_size[f_id] = []
+    if len(switch.sketch_flow_size[f_id]) < PACKET_CNT_THRESHOLD:
+        switch.sketch_flow_size[f_id].append(packet[6])
     # Record
     return size
 
-def classify(f_id, packet, packet_m, arrival_t):
-    global DNN_counter, DNN_right
+def classify(switch, f_id, packet, packet_m, arrival_t):
     def normalize(f_id2, packet_m, arrival_t):
-        feature_time = abs(arrival_t - flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
+        feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
         normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
-        normalize_packet2 = (flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
+        normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
         return np.array([[feature_time, normalize_packet1, normalize_packet2]])
-    if len(coflow_queue.keys()) == 0: # Create a new queue
+    if len(switch.coflow_queue.keys()) == 0: # Create a new queue
         return packet[0] # Real coflow ID
     sameScore = []
     diffScore = []
-    sorted_coflow_keys = sorted(coflow_queue.keys())
+    sorted_coflow_keys = sorted(switch.coflow_queue.keys())
     for i in range(len(sorted_coflow_keys)):
         sameScore.append(0)
         diffScore.append(0)
         cnt = 0
-        sampleNum = min(len(coflow_queue[sorted_coflow_keys[i]][0]), 20)
-        sampleList = random.sample(range(len(coflow_queue[sorted_coflow_keys[i]][0])), sampleNum)
+        sampleNum = min(len(switch.coflow_queue[sorted_coflow_keys[i]][0]), 20)
+        sampleList = random.sample(range(len(switch.coflow_queue[sorted_coflow_keys[i]][0])), sampleNum)
         for j in sampleList: # Each flow in coflow
-            if coflow_queue[sorted_coflow_keys[i]][0][j] not in flow_record_table.keys():
+            if switch.coflow_queue[sorted_coflow_keys[i]][0][j] not in switch.flow_record_table.keys():
                 continue
-            n = normalize(coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
+            n = normalize(switch.coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
             predict_prob = MODEL.predict(n)
             predict_classes = predict_prob[0]
             sameScore[i] += predict_classes[1]
             diffScore[i] += predict_classes[0]
             cnt += 1
             # ------ Record ------
-            DNN_counter += 1
-            if packet[0] == coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] > predict_classes[0]:
-                DNN_right += 1
-            if packet[0] != coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] <= predict_classes[0]:
-                DNN_right += 1
+            switch.DNN_counter += 1
+            if packet[0] == switch.coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] > predict_classes[0]:
+                switch.DNN_right += 1
+            if packet[0] != switch.coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] <= predict_classes[0]:
+                switch.DNN_right += 1
             # ------ Record ------
         if cnt > 0:
             sameScore[i] /= cnt
@@ -376,75 +342,140 @@ def classify(f_id, packet, packet_m, arrival_t):
                 score[1] = sameScore[i]
                 score[0] = sorted_coflow_keys[i]
     if score[1] == -1: # No friend and create a new job
-        if len(coflow_queue.keys()) < COFLOW_TABLE_SIZE:
+        if len(switch.coflow_queue.keys()) < COFLOW_TABLE_SIZE:
             c_id = packet[0] # Real coflow ID
         else:
             # Find the smallest coflow
             small = [0, sys.maxsize] # [c_id, #]
             for i in range(len(sorted_coflow_keys)):
-                if len(coflow_queue[sorted_coflow_keys[i]][0]) < small[1]:
+                if len(switch.coflow_queue[sorted_coflow_keys[i]][0]) < small[1]:
                     small[0] = sorted_coflow_keys[i]
-                    small[1] = len(coflow_queue[sorted_coflow_keys[i]][0])
+                    small[1] = len(switch.coflow_queue[sorted_coflow_keys[i]][0])
             c_id = small[0] # Smallest coflow ID
     else:
         c_id = score[0] # Existing coflow ID
     return c_id
 
-def schedule(table):
-    for c_id in table.keys():
-        size = table[c_id][0] * 1024 ##
-        curP = 0
-        tmp = INIT_QUEUE_LIMIT
-        while size > tmp:
-            curP += 1
-            tmp *= JOB_SIZE_MULT
-            if curP >= NUM_JOB_QUEUES:
-                break
-        table[c_id][1] = curP
-    return table
+def cross_classify():
+    return
 
-def updateFlowRecordTable(f_id, packet):
-    global sketch_size_err, sketch_cnt_err, sketch_mean_err, sketch_counter
+#label manually with some error probability
+def label(packet,c_list,percentage):
+    prob = random.randrange(0,100)
+    if prob<percentage:
+        return packet[0]
+    else:
+        cid = random.choice(c_list)
+        while True:
+            if cid != packet[0]:
+                break
+            else:
+                cid = random.choice(c_list)
+        return cid
+
+def intra_classify(switch, f_id, packet, packet_m, arrival_t):
+    def normalize(switch, f_id2, packet_m, arrival_t):
+        feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
+        normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
+        normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
+        return np.array([[feature_time, normalize_packet1, normalize_packet2]])
+    if len(switch.coflow_queue.keys()) == 0: # Create a new queue
+        return packet[0] # Real coflow ID
+    sameScore = []
+    diffScore = []
+    sorted_coflow_keys = sorted(switch.coflow_queue.keys())
+    for i in range(len(sorted_coflow_keys)):
+        sameScore.append(0)
+        diffScore.append(0)
+        cnt = 0
+        sampleNum = min(len(switch.coflow_queue[sorted_coflow_keys[i]][0]), 20)
+        sampleList = random.sample(range(len(switch.coflow_queue[sorted_coflow_keys[i]][0])), sampleNum)
+        for j in sampleList: # Each flow in coflow
+            if switch.coflow_queue[sorted_coflow_keys[i]][0][j] not in switch.flow_record_table.keys():
+                continue
+            n = normalize(switch, switch.coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
+            result = MODEL.predict_proba(n)
+            sameScore[i] += result[0][1]
+            diffScore[i] += result[0][0]
+            cnt += 1
+            # ------ Record ------
+            switch.DNN_counter += 1
+            if packet[0] == switch.coflow_queue[sorted_coflow_keys[i]][1][j] and result[0][1] > result[0][0]:
+                switch.DNN_right += 1
+            if packet[0] != switch.coflow_queue[sorted_coflow_keys[i]][1][j] and result[0][1] <= result[0][0]:
+                switch.DNN_right += 1
+            # ------ Record ------
+        if cnt > 0:
+            sameScore[i] /= cnt
+            diffScore[i] /= cnt
+    score = [-1, -1] # [c_id, Max Score]
+    for i in range(len(sorted_coflow_keys)):
+        if sameScore[i] > diffScore[i]:
+            if sameScore[i] > score[1]:
+                score[1] = sameScore[i]
+                score[0] = sorted_coflow_keys[i]
+    if score[1] == -1: # No friend and create a new job
+        if len(switch.coflow_queue.keys()) < COFLOW_TABLE_SIZE:
+            c_id = packet[0] # Real coflow ID
+        else:
+            # Find the smallest coflow
+            small = [0, sys.maxsize] # [c_id, #]
+            for i in range(len(sorted_coflow_keys)):
+                if len(switch.coflow_queue[sorted_coflow_keys[i]][0]) < small[1]:
+                    small[0] = sorted_coflow_keys[i]
+                    small[1] = len(switch.coflow_queue[sorted_coflow_keys[i]][0])
+            c_id = small[0] # Smallest coflow ID
+    else:
+        c_id = score[0] # Existing coflow ID
+    return c_id
+
+def updateFlowRecordTable(switch, f_id, c_list, packet):
+    #flow_record_table
+    #                                 0          1        2    3         4         5       6
+    #(in Controller) Flow_ID(key), Coflow_ID, Priority, Size, TTL, Arrival_Time, Size_m, Finish
     # Get data from Packet Table
-    cnt = sketchAction(f_id, packet_count_table, 0, False)
-    size = sketchAction(f_id, flow_size_table, 0, False)
+    cnt = sketchAction(switch, f_id, switch.packet_count_table, 0, False)
+    size = sketchAction(switch, f_id, switch.flow_size_table, 0, False)
     if cnt == 1:
         print("Put ", f_id, "in Flow Table")
-        if f_id in flow_record_table.keys():
+        if f_id in switch.flow_record_table.keys():
             print("(cnt = 1) Flow ", f_id, " is in Flow Table")
-            flow_record_table[f_id][6] = False
-            flow_record_table[f_id][3] = INITIAL_TTL
+            switch.flow_record_table[f_id][6] = False #finish = false
+            switch.flow_record_table[f_id][3] = INITIAL_TTL
         else:
-            flow_record_table[f_id] = [None, 0, size, INITIAL_TTL, packet[5], 0, False]
+            switch.flow_record_table[f_id] = [None, 0, size, INITIAL_TTL, packet[5], 0, False]
         return
     elif cnt == PACKET_CNT_THRESHOLD:
-        sketchAction(f_id, packet_count_table, 0, True) # Reset
+        sketchAction(switch, f_id, switch.packet_count_table, 0, True) # Reset
         # Classify
         packet_m = size / cnt
         # ------ Record ------
-        if f_id in sketch_flow_size.keys(): 
-            real_packet_s = sum(sketch_flow_size[f_id])
-            real_packet_c = len(sketch_flow_size[f_id])
+        if f_id in switch.sketch_flow_size.keys(): 
+            real_packet_s = sum(switch.sketch_flow_size[f_id])
+            real_packet_c = len(switch.sketch_flow_size[f_id])
             real_packet_m = real_packet_s/real_packet_c
             if math.isnan(abs(real_packet_s - size) / real_packet_s) == False and math.isnan(abs(real_packet_c - cnt) / real_packet_c) == False and math.isnan(abs(real_packet_m - packet_m) / (real_packet_s/real_packet_c)) == False:
-                sketch_size_err += abs(real_packet_s - size) / real_packet_s
-                sketch_cnt_err += abs(real_packet_c - cnt) / real_packet_c
-                sketch_mean_err += abs(real_packet_m - packet_m) / (real_packet_s/real_packet_c)
-                sketch_counter += 1
+                switch.sketch_size_err += abs(real_packet_s - size) / real_packet_s
+                switch.sketch_cnt_err += abs(real_packet_c - cnt) / real_packet_c
+                switch.sketch_mean_err += abs(real_packet_m - packet_m) / (real_packet_s/real_packet_c)
+                switch.sketch_counter += 1
                 print("------ ", f_id, " ------")
                 print("sketch size: ", size, " real size: ", real_packet_s)
                 print("sketch cnt: ", cnt, " real cnt: ", real_packet_c)
                 print("sketch mean: ", packet_m, " real mean: ", real_packet_s/real_packet_c)
                 print("-----------------")
         # ------ Record ------
-        if f_id not in flow_record_table.keys():
+        if f_id not in switch.flow_record_table.keys():
             print("(cnt = ", PACKET_CNT_THRESHOLD, ") Flow ", f_id, " is not in Flow Table")
-            flow_record_table[f_id] = [None, 0, size, INITIAL_TTL, packet[5], packet_m, False]
+            switch.flow_record_table[f_id] = [None, 0, size, INITIAL_TTL, packet[5], packet_m, False]
         else:
-            flow_record_table[f_id][2] = size
-            flow_record_table[f_id][5] = packet_m
-        arrival_t = flow_record_table[f_id][4]
-        c_id = classify(f_id, packet, packet_m, arrival_t)
+            switch.flow_record_table[f_id][2] = size
+            switch.flow_record_table[f_id][5] = packet_m
+        arrival_t = switch.flow_record_table[f_id][4]
+        #c_id = classify(f_id, packet, packet_m, arrival_t)
+        #label manually with some error probability
+        c_id = label(packet, c_list, 80)
+        print(c_id)
         # ------ Record ------
         real_coflow_id = packet[0]
         real_size = fb_coflow_size[str(real_coflow_id)]
@@ -457,228 +488,211 @@ def updateFlowRecordTable(f_id, packet):
         # ------ Record ------
         # Update Coflow Data and set priority
         priority = 0
-        if c_id in coflow_queue.keys(): # Record in Coflow Queue for classify
-            coflow_queue[c_id][0].append(f_id)
-            coflow_queue[c_id][1].append(packet[0]) # Real coflow id of this flow 
+        if c_id in switch.coflow_queue.keys(): # Record in Coflow Queue for classify
+            switch.coflow_queue[c_id][0].append(f_id)
+            switch.coflow_queue[c_id][1].append(packet[0]) # Real coflow id of this flow 
         else:
-            coflow_queue[c_id] = [[f_id],[packet[0]]]
-        if c_id in coflow_priority_table.keys(): # Update priority
-            priority = coflow_priority_table[c_id][1]
+            switch.coflow_queue[c_id] = [[f_id],[packet[0]]]
+        if c_id in switch.coflow_priority_table.keys(): # Update priority
+            priority = switch.coflow_priority_table[c_id][1]
         else: # New coflow
-            coflow_priority_table[c_id] = [0, 0]
+            switch.coflow_priority_table[c_id] = [0, 0]
         # Update Flow Table
-        flow_record_table[f_id][0] = c_id
-        flow_record_table[f_id][1] = priority
+        switch.flow_record_table[f_id][0] = c_id
+        switch.flow_record_table[f_id][1] = priority
         # Insert to Priority Table
-        if len(priority_table) < PRIORITY_TABLE_SIZE:
-            priority_table[f_id] = priority
+        if len(switch.priority_table) < PRIORITY_TABLE_SIZE:
+            switch.priority_table[f_id] = priority
         else:
             print("(Priority Table) Overflow")
             # Todo
 
-def PIFO(packet, wait_queue):
-    wait_queue.append(packet)
-    wait_queue = sorted(wait_queue, key= lambda s: s[-1], reverse=True)
-    return wait_queue
+def schedule(table):
+    for c_id in table.keys():
+        size = table[c_id][0] * 1024 ##
+        curPriority = 0
+        tmp = INIT_QUEUE_LIMIT
+        while size > tmp:
+            curPriority += 1
+            tmp *= JOB_SIZE_MULT
+            if curPriority >= NUM_JOB_QUEUES:
+                break
+        table[c_id][1] = curPriority
+    return table
 
-def controllerUpdate(coflow_priority_table):
+def controllerUpdate(switch):
     # Update Flow Table (Size)
-    coflow_size = {} # Coflow size, Finish 
-    for f_id in flow_record_table.keys():
-        if flow_record_table[f_id][6] == False: 
-            size = sketchAction(f_id, flow_size_table, 0, False)
-            flow_record_table[f_id][2] = size
+    coflow_size = {} # Coflow id, coflow size 
+    for f_id in switch.flow_record_table.keys():
+        if switch.flow_record_table[f_id][6] == False: #if flow not finished
+            size = sketchAction(switch, f_id, switch.flow_size_table, 0, False)
+            switch.flow_record_table[f_id][2] = size #update flow size
         # For next step
-        if flow_record_table[f_id][0] != None:
-            if flow_record_table[f_id][0] not in coflow_size.keys():
-                coflow_size[flow_record_table[f_id][0]] = flow_record_table[f_id][2]
+        if switch.flow_record_table[f_id][0] != None: #if flow has coflow id
+            if switch.flow_record_table[f_id][0] not in coflow_size.keys():
+                coflow_size[switch.flow_record_table[f_id][0]] = switch.flow_record_table[f_id][2]
             else:
-                coflow_size[flow_record_table[f_id][0]] += flow_record_table[f_id][2]  
+                coflow_size[switch.flow_record_table[f_id][0]] += switch.flow_record_table[f_id][2]  
     # Update coflow size
-    for c_id in coflow_priority_table.keys():
+    for c_id in switch.coflow_priority_table.keys():
         if c_id not in coflow_size.keys(): # Bug
             continue
-        coflow_priority_table[c_id][0] = coflow_size[c_id] 
+        switch.coflow_priority_table[c_id][0] = coflow_size[c_id] 
     # Schedule
-    coflow_priority_table = schedule(coflow_priority_table) # Update coflow priority
+    switch.coflow_priority_table = schedule(switch.coflow_priority_table) # Update coflow priority
     # print("Coflow Table", coflow_priority_table)
     # Update Flow Table (Priority)
     update_flow_list = [] # Flow ID, Priority
-    for f_id in flow_record_table.keys():
-        if flow_record_table[f_id][0] != None: # Classified
-            if flow_record_table[f_id][1] != coflow_priority_table[flow_record_table[f_id][0]][1]: # Update priority
-                flow_record_table[f_id][1] = coflow_priority_table[flow_record_table[f_id][0]][1]
-                update_flow_list.append([f_id, flow_record_table[f_id][1]])
+    for f_id in switch.flow_record_table.keys():
+        if switch.flow_record_table[f_id][0] != None: # Classified
+            if switch.flow_record_table[f_id][1] != switch.coflow_priority_table[switch.flow_record_table[f_id][0]][1]: # Update priority
+                switch.flow_record_table[f_id][1] = switch.coflow_priority_table[switch.flow_record_table[f_id][0]][1]
+                update_flow_list.append([f_id, switch.flow_record_table[f_id][1]])
     # Update Priority Table
     for entry in update_flow_list:
-        if entry[0] not in priority_table.keys():
+        if entry[0] not in switch.priority_table.keys():
             print("(Update priority in Priority Table) Flow ", f_id, " is not in Priority Table")
-            if len(priority_table) < PRIORITY_TABLE_SIZE:
-                priority_table[f_id] = entry[1]
+            if len(switch.priority_table) < PRIORITY_TABLE_SIZE:
+                switch.priority_table[f_id] = entry[1]
             else:
                 print("(Priority Table) Overflow")
                 # Todo
         else:
-            priority_table[entry[0]] = entry[1]
-    return coflow_priority_table 
+            switch.priority_table[entry[0]] = entry[1]
+    return switch.coflow_priority_table
 
-def controllerUpdateTTL(f_id):
+def controllerUpdateTTL(switch, f_id):
     clear_now = []
     finished_coflow = {}
     # Update TTL
-    for f in flow_record_table.keys(): 
+    for f in switch.flow_record_table.keys(): 
         if f == f_id:
-            flow_record_table[f_id][3] = INITIAL_TTL
-            flow_record_table[f][6] = False
+            switch.flow_record_table[f_id][3] = INITIAL_TTL
+            switch.flow_record_table[f][6] = False
         else:
-            flow_record_table[f][3] -= 1
-            if flow_record_table[f][3] <= 0 and flow_record_table[f][6] == False:
+            switch.flow_record_table[f][3] -= 1
+            if switch.flow_record_table[f][3] <= 0 and switch.flow_record_table[f][6] == False:
                 print(counter, " ############### Clear", f_id)
-                if flow_record_table[f][0] == None: 
-                    sketchAction(f, packet_count_table, 0, True)
+                if switch.flow_record_table[f][0] == None: 
+                    sketchAction(switch, f, switch.packet_count_table, 0, True)
                     clear_now.append(f)
                 else: # Classified
-                    if f in priority_table.keys():
-                        del priority_table[f]
-                        sketchAction(f, flow_size_table, 0, True)
-                    flow_record_table[f][6] = True
-        if flow_record_table[f][0] != None:
-            if flow_record_table[f][0] not in finished_coflow.keys():
-                finished_coflow[flow_record_table[f][0]] = True
-            if flow_record_table[f][6] == False: # Flow unfinished
-                finished_coflow[flow_record_table[f][0]] = False # Coflow unfinished
+                    if f in switch.priority_table.keys():
+                        del switch.priority_table[f]
+                        sketchAction(switch, f, switch.flow_size_table, 0, True)
+                    switch.flow_record_table[f][6] = True
+        if switch.flow_record_table[f][0] != None:
+            if switch.flow_record_table[f][0] not in finished_coflow.keys():
+                finished_coflow[switch.flow_record_table[f][0]] = True
+            if switch.flow_record_table[f][6] == False: # Flow unfinished
+                finished_coflow[switch.flow_record_table[f][0]] = False # Coflow unfinished
     # Delete finished coflows
     for c_id in finished_coflow.keys(): 
         if finished_coflow[c_id] == True:
-            del coflow_priority_table[c_id]
-            for f in set(coflow_queue[c_id][0]):
-                if f in flow_record_table.keys():
-                    del flow_record_table[f]
-            del coflow_queue[c_id]
+            del switch.coflow_priority_table[c_id]
+            for f in set(switch.coflow_queue[c_id][0]):
+                if f in switch.flow_record_table.keys():
+                    del switch.flow_record_table[f]
+            del switch.coflow_queue[c_id]
     # Delete finished flows       
     for f in clear_now:
-        del flow_record_table[f]
-    return 
-
-def egress(wait_queue, output_queue):
-    out_packet = wait_queue.pop()
-    output_queue.append(out_packet)
-    # ------ Record ------
-    # Coflow ID(key), Start Time, Completion Time, Duration Time, Coflow Size, Coflow Priority
-    if out_packet[0] not in coflow_completion.keys():
-        coflow_completion[out_packet[0]] = [counter, counter, 0, fb_coflow_size[str(out_packet[0])], fb_coflow_priority[str(out_packet[0])]]
-    else:
-        coflow_completion[out_packet[0]][1] = counter
-        coflow_completion[out_packet[0]][2] = counter - coflow_completion[out_packet[0]][0]
-    # ------ Record ------
-    return output_queue
-
-def printTable(table):
-    print("----------------")
-    for i in range(len(table[0])):
-        if table[0][i] != 0:
-            print(i, "\t", table[0][i])
-    print("----------------")
-
-def printOutputOrder(queue):
-    pre = -1
-    pre_c = -1
-    c = 0
-    for i in range(len(queue)):
-        now = queue[i][-1]
-        now_c = queue[i][0]
-        c += 1
-        if pre != now and pre_c != now_c:
-            print("coflow: ", now_c, " p: ",now,  end=",")
-            print(" num:", c)
-            pre = now
-            pre_c = now_c
-            c = 0
+        del switch.flow_record_table[f]
     return
+
+def PIFO(packet, wait_queue):
+    #print("PIFO -> packet = ", packet)
+    #print("PIFO -> packet type : ", type(packet))
+    wait_queue.put((packet[-1],packet))
+    #print("PIFO -> after put : ", wait_queue.get())
+    return wait_queue
+
+def egress(switch):
+    item = switch.wait_queue.get()
+    out_packet = item[1]
+    switch.output_queue.append(out_packet)
+    # ------ Record ------
+    if out_packet[0] not in switch.coflow_completion.keys():
+        switch.coflow_completion[out_packet[0]] = [counter, counter, 0, fb_coflow_size[str(out_packet[0])], fb_coflow_priority[str(out_packet[0])]]
+    else:
+        switch.coflow_completion[out_packet[0]][1] = counter
+        switch.coflow_completion[out_packet[0]][2] = counter - switch.coflow_completion[out_packet[0]][0]
+    # ------ Record ------
+    return switch.output_queue
 
 if __name__ == "__main__":
     readDataSet()
     print("Read packets data: ")
     input_queue, input_data_flow, f_id_list, c_list = loadCsvData()
-    #input_queue, input_data_flow, f_id_list, c_list = loadcsvpartial()
     print(len(c_list), " coflows, ", len(f_id_list), " flows and ", len(input_queue), " packets")
-    time.sleep(3) 
 
-    packet_index = -1
+    #sampling
+    sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
+    print("After sampling: ")
+    print(len(sample_c_list), " coflows, ", len(sample_f_id_list), " flows and ", len(sample_input_queue), " packets")
+
+    #grouping
+    switches=[]
+    numOfSwitches = 2
+    for i in range(numOfSwitches):
+        newswitch = Switch()
+        switches.append(newswitch)
+    switches = grouping(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, numOfSwitches)
+    for switch in switches:
+        print(len(switch.input_queue))
+
+    packet_index=-1
     while True:
-        counter += 1 # timer
-        packet_index += 1
-        if packet_index < len(input_queue):
-            this_packet = list(input_queue[packet_index])
-            f_id = getFlowID(this_packet, f_id_list)
-            # Add priority into packet header
-            find, this_packet = checkPriorityTable(f_id, this_packet)
-            if not find:
-                # Update Packet Count Table
-                action = updatePacketCntTable(f_id, this_packet)
-            # Update Flow Size Table
-            updateFlowSizeTable(f_id, this_packet)
-            # New flow or Packet full, inform controller
-            if not find and action:
-                updateFlowRecordTable(f_id, this_packet)
-            # Controller update
-            if counter % CONTROLLER_UPDATE_TIME == 0 or packet_index == len(input_queue)-1:
-                coflow_priority_table = controllerUpdate(coflow_priority_table) 
-            # PIFO
-            wait_queue = PIFO(this_packet, wait_queue)
-            
-        # Egress
-        if counter % EGRESS_RATE == 0:
-            output_queue = egress(wait_queue, output_queue)
-        # Print Result
-        if counter % 100 == 0:
-            print("Time slot: ", counter)
-            print("Size of Priority Table: ", len(priority_table.keys()))
-            priority_table_time.append(counter)
-            priority_table_size.append(len(priority_table.keys()))
-            if DNN_counter != 0:
-                print("DNN Accuracy: ", DNN_right / DNN_counter * 100, " %")
-            if sketch_counter != 0:
-                print("Sketch Count Err: ", sketch_cnt_err / sketch_counter * 100, " %")
-                print("Sketch Size Err: ", sketch_size_err / sketch_counter * 100, " %")
-                print("Sketch Mean Err: ", sketch_mean_err / sketch_counter * 100, " %")
-            print("len of wait queue: ", len(wait_queue))
-        # Update TTL
-        controllerUpdateTTL(f_id)
-        # Completed
-        if counter >= len(input_queue) and len(wait_queue) == 0: # stop
-            print(len(c_list), " coflows, ", len(f_id_list), " flows and ", len(input_queue), " packets")
-            print("Completed")
-            print("************************************************")
-            print("Accuracy: ", DNN_right / DNN_counter * 100, " %")
-            print("Sketch Count Err: ", sketch_cnt_err / sketch_counter * 100, " %")
-            print("Sketch Size Err: ", sketch_size_err / sketch_counter * 100, " %")
-            print("Sketch Size Err: ", sketch_size_err / sketch_counter * 100, " %")
-            print("Packet Count Collision: ", pkt_collision_counter)
-            print("FLow Size Collision: ", flow_collision_counter)
-            print("************************************************")
-            # printOutputOrder(output_queue)
-            break           
-    
+        counter+=1
+        packet_index+=1
+        done_switches = []
+        notdone_switches = []
+        for switch in switches:
+            if counter >= len(switch.input_queue) and switch.wait_queue.qsize() == 0:
+                done_switches.append(switch)
+            else:
+                notdone_switches.append(switch)
+        if not notdone_switches:
+            break
+        for switch in notdone_switches:
+            if packet_index < len(switch.input_queue):
+                this_packet = list(switch.input_queue[packet_index])
+                f_id = getFlowID(this_packet, sample_f_id_list)
+                find, this_packet = checkPriorityTable(switch, f_id, this_packet)
+                if not find:
+                    # Update Packet Count Table
+                    action = updatePacketCntTable(switch, f_id, this_packet)
+                # Update Flow Size Table
+                updateFlowSizeTable(switch, f_id, this_packet)
+                # New flow or Packet full, inform controller
+                if not find and action:
+                    updateFlowRecordTable(switch, f_id, sample_c_list, this_packet)
+                #print("flow record table: ", switch.flow_record_table)
+                # Controller update
+                if counter % CONTROLLER_UPDATE_TIME == 0 or packet_index == len(switch.input_queue)-1:
+                    switch.coflow_priority_table = controllerUpdate(switch)
+                #PIFO
+                switch.wait_queue = PIFO(this_packet, switch.wait_queue)
+            # Egress
+            if counter % EGRESS_RATE == 0:
+                switch.output_queue = egress(switch)
+            # Update TTL
+            controllerUpdateTTL(switch, f_id)
+
+    print("All switches complete")
     # ------ Record ------
-    with open(OUTPUT_CSV, "w", newline="") as csvfile:
-        writer = csv.writer(csvfile, delimiter=",")
-        writer.writerow(["Time slot", "Size"])
-        for i in range(len(priority_table_time)):
-            writer.writerow([priority_table_time[i], priority_table_size[i]])
-        print("Write Completed")
-    with open(OUTPUT_COMPLETION_TIME, "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["Coflow ID", "Start Time", "Completion Time", "Duration Time", "Coflow Size", "Coflow Priority"])
-        for k, v in coflow_completion.items():
-            tmp = [k]
-            tmp.extend(v)
-            writer.writerow(tmp)
+    for switch in switches:
+        with open(OUTPUT_CSV+str(switches.index(switch)), "w", newline="") as csvfile:
+            writer = csv.writer(csvfile, delimiter=",")
+            writer.writerow(["Time slot", "Size"])
+            for i in range(len(switch.priority_table_time)):
+                writer.writerow([switch.priority_table_time[i], switch.priority_table_size[i]])
+            print("Write Completed")
+        with open(OUTPUT_COMPLETION_TIME+str(switches.index(switch)), "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Coflow ID", "Start Time", "Completion Time", "Duration Time", "Coflow Size", "Coflow Priority"])
+            for k, v in switch.coflow_completion.items():
+                tmp = [k]
+                tmp.extend(v)
+                writer.writerow(tmp)
     # ------ Record ------
-
-
-
-
-
-
 
