@@ -627,6 +627,8 @@ if __name__ == "__main__":
 
     #sampling
     sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
+    while len(sample_input_queue)>200000:
+        sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
     print("After sampling: ")
     print(len(sample_c_list), " coflows, ", len(sample_f_id_list), " flows and ", len(sample_input_queue), " packets")
 
@@ -675,9 +677,22 @@ if __name__ == "__main__":
             # Egress
             if counter % EGRESS_RATE == 0:
                 switch.output_queue = egress(switch)
+            # Print Result
+            if counter % 100 == 0:
+                print("Switch ", switches.index(switch))
+                print("Time slot: ", counter)
+                print("Size of Priority Table: ", len(switch.priority_table.keys()))
+                switch.priority_table_time.append(counter)
+                switch.priority_table_size.append(len(switch.priority_table.keys()))
+                if switch.DNN_counter != 0:
+                    print("DNN Accuracy: ", switch.DNN_right / switch.DNN_counter * 100, " %")
+                if switch.sketch_counter != 0:
+                    print("Sketch Count Err: ", switch.sketch_cnt_err / switch.sketch_counter * 100, " %")
+                    print("Sketch Size Err: ", switch.sketch_size_err / switch.sketch_counter * 100, " %")
+                    print("Sketch Mean Err: ", switch.sketch_mean_err / switch.sketch_counter * 100, " %")
+                print("len of wait queue: ", len(switch.wait_queue.queue))
             # Update TTL
             controllerUpdateTTL(switch, f_id)
-
     print("All switches complete")
     # ------ Record ------
     for switch in switches:
