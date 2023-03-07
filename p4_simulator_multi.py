@@ -8,6 +8,7 @@ import sys
 import time
 import math
 from queue import PriorityQueue
+from numba import jit, cuda
 
 # Parameter
 INPUT_PATH = "./CSV/"
@@ -184,10 +185,10 @@ def loadCsvData():
     f_id_list = input_data_flow.keys()
     return input_data, input_data_flow, f_id_list, c_list
 
-def sampling(k):
+def sampling(input_queue, input_data_flow, f_id_list, c_list, k):
     shuffle_c_list = sorted(c_list)
     random.shuffle(shuffle_c_list)
-    sample_c_list = shuffle_c_list[:10]
+    sample_c_list = shuffle_c_list[:k]
     sample_f_id_list = []
     for cid in sample_c_list:
         for fid in f_id_list:
@@ -221,6 +222,25 @@ def grouping(switches, sample_input_queue, sample_input_flow, sample_f_id_list, 
     for switch in switches:
         switch.input_queue = switch_datas[switches.index(switch)]
     return switches
+
+def grouping2(switches, sample_input_queue, sample_input_flow, sample_f_id_list, sample_c_list, numOfSwitches):
+    shuffle_cid = sample_c_list
+    print("before shuffle: ",shuffle_cid)
+    random.shuffle(shuffle_cid)
+    print("after shuffle: ", shuffle_cid)
+    shuffle_cid_list = np.array_split(shuffle_cid, numOfSwitches)
+    shuffle_cid_list_sets = []
+    for cid_list in shuffle_cid_list:
+        shuffle_cid_list_sets.append(set(cid_list))
+    switch_datas = [[]for i in range(numOfSwitches)]
+    for item in sample_input_queue:
+        cid = item[0]
+        for cid_list_set in shuffle_cid_list_sets:
+            if cid in cid_list_set:
+                switch_datas[shuffle_cid_list_sets.index(cid_list_set)].append(item)
+    for switch in switches:
+        switch.input_queue = switch_datas[switches.index(switch)]
+    return switches, shuffle_cid_list
 
 def getFlowID(packet, f_id_list):
     c_id = packet[0]
@@ -299,69 +319,15 @@ def updateFlowSizeTable(switch, f_id, packet):
     # Record
     return size
 
-def classify(switch, f_id, packet, packet_m, arrival_t):
-    def normalize(f_id2, packet_m, arrival_t):
-        feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
-        normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
-        normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
-        return np.array([[feature_time, normalize_packet1, normalize_packet2]])
-    if len(switch.coflow_queue.keys()) == 0: # Create a new queue
-        return packet[0] # Real coflow ID
-    sameScore = []
-    diffScore = []
-    sorted_coflow_keys = sorted(switch.coflow_queue.keys())
-    for i in range(len(sorted_coflow_keys)):
-        sameScore.append(0)
-        diffScore.append(0)
-        cnt = 0
-        sampleNum = min(len(switch.coflow_queue[sorted_coflow_keys[i]][0]), 20) #min(num of flows in queue, 20)
-        sampleList = random.sample(range(len(switch.coflow_queue[sorted_coflow_keys[i]][0])), sampleNum)
-        for j in sampleList: # Each flow in coflow
-            if switch.coflow_queue[sorted_coflow_keys[i]][0][j] not in switch.flow_record_table.keys():
-                continue
-            n = normalize(switch.coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
-            predict_prob = MODEL.predict(n)
-            predict_classes = predict_prob[0]
-            sameScore[i] += predict_classes[1]
-            diffScore[i] += predict_classes[0]
-            cnt += 1
-            # ------ Record ------
-            switch.DNN_counter += 1
-            if packet[0] == switch.coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] > predict_classes[0]:
-                switch.DNN_right += 1
-            if packet[0] != switch.coflow_queue[sorted_coflow_keys[i]][1][j] and predict_classes[1] <= predict_classes[0]:
-                switch.DNN_right += 1
-            # ------ Record ------
-        if cnt > 0:
-            sameScore[i] /= cnt
-            diffScore[i] /= cnt
-    score = [-1, -1] # [c_id, Max Score]
-    for i in range(len(sorted_coflow_keys)):
-        if sameScore[i] > diffScore[i]:
-            if sameScore[i] > score[1]:
-                score[1] = sameScore[i]
-                score[0] = sorted_coflow_keys[i]
-    if score[1] == -1: # No friend and create a new job
-        if len(switch.coflow_queue.keys()) < COFLOW_TABLE_SIZE:
-            c_id = packet[0] # Real coflow ID
-        else:
-            # Find the smallest coflow
-            small = [0, sys.maxsize] # [c_id, #]
-            for i in range(len(sorted_coflow_keys)):
-                if len(switch.coflow_queue[sorted_coflow_keys[i]][0]) < small[1]:
-                    small[0] = sorted_coflow_keys[i]
-                    small[1] = len(switch.coflow_queue[sorted_coflow_keys[i]][0])
-            c_id = small[0] # Smallest coflow ID
-    else:
-        c_id = score[0] # Existing coflow ID
-    return c_id
+def normalize(f_id2, packet_m, arrival_t):
+    feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
+    normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
+    normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
+    return np.array([[feature_time, normalize_packet1, normalize_packet2]])
 
-def intra_classify(switch, f_id, packet, packet_m, arrival_t):
-    def normalize(f_id2, packet_m, arrival_t):
-        feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
-        normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
-        normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
-        return np.array([[feature_time, normalize_packet1, normalize_packet2]])
+# function optimized to run on gpu 
+#@jit(target_backend='cuda') 
+def classify(switch, f_id, packet, packet_m, arrival_t):
     if len(switch.coflow_queue.keys()) == 0: # Create a new queue
         return packet[0] # Real coflow ID
     sameScore = []
@@ -481,7 +447,7 @@ def updateFlowRecordTable(switches, switch, f_id, c_list, packet):
             switch.flow_record_table[f_id][5] = packet_m
         arrival_t = switch.flow_record_table[f_id][4]
         c_id = classify(switch, f_id, packet, packet_m, arrival_t)
-        intra_classify_cid = intra_classify(switches[1-switches.index(switch)], f_id, packet, packet_m, arrival_t)
+        inter_classify_cid = classify(switches[1-switches.index(switch)], f_id, packet, packet_m, arrival_t)
 
         #label manually with some error probability
         #c_id = label(packet, c_list, 80)
@@ -524,7 +490,7 @@ def updateFlowRecordTable(switches, switch, f_id, c_list, packet):
         print("major_groundtruth: ", major_groundtruth)
         print("minor_groundtruth: ", minor_groundtruth)
         print("major accuracy =", major_groundtruth[c_id]/sum(major_groundtruth.values())*100, "%")
-        print("minor accuracy =", minor_groundtruth[intra_classify_cid]/sum(minor_groundtruth.values())*100, "%")
+        print("minor accuracy =", minor_groundtruth[inter_classify_cid]/sum(minor_groundtruth.values())*100, "%")
 
 def schedule(table):
     for c_id in table.keys():
@@ -645,10 +611,10 @@ if __name__ == "__main__":
     print(len(c_list), " coflows, ", len(f_id_list), " flows and ", len(input_queue), " packets")
 
     #sampling
-    sample_limit = 100000
-    sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
+    sample_limit = 300000
+    sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(30)
     while len(sample_input_queue)>sample_limit:
-        sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(10)
+        sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(30)
     print("After sampling: ")
     print(len(sample_c_list), " coflows, ", len(sample_f_id_list), " flows and ", len(sample_input_queue), " packets")
 
@@ -658,10 +624,12 @@ if __name__ == "__main__":
     for i in range(numOfSwitches):
         newswitch = Switch()
         switches.append(newswitch)
-    switches = grouping(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, numOfSwitches)
+    #switches = grouping(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, numOfSwitches)
+    switches, shuffle_cid_list = grouping2(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list, numOfSwitches)
     for switch in switches:
         print(len(switch.input_queue))
-        print(switch.input_queue[:10])
+    for cid_list in shuffle_cid_list:
+        print("switch", shuffle_cid_list.index(cid_list), ": ", cid_list)
 
     packet_index=-1
     while True:
