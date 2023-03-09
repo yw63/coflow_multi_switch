@@ -56,33 +56,34 @@ fb_coflow_size = {}
 fb_coflow_priority = {}
 
 class Switch:
-    # Queue
-    coflow_queue = {} # Classified Coflow_ID(key), [[Flows_List], [Real_Coflow_ID]] #v
-    input_queue = [] #v
-    output_queue = []
-    wait_queue = PriorityQueue()
+    def __init__(self):
+        # Queue
+        self.coflow_queue = {} # Coflow_ID(key), [Flows_List, Real_Coflow_ID] #v
+        self.input_queue = [] #v
+        self.output_queue = []
+        self.wait_queue = PriorityQueue()
 
-    # Table
-    priority_table = {} # (Match Table) Flow_ID(key), Priority #v
-    packet_count_table = [[0 for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
-    flow_size_table = [[0 for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
-    flow_record_table = {} # (in Controller) Flow_ID(key), Coflow_ID, Priority, Size, TTL, Arrival_Time, Size_m, Finish #v
-    coflow_priority_table = {} # (in Controller) Classified Coflow_ID(key), Coflow_Size, Priority
-    # Other
-    DNN_counter = 0
-    DNN_right = 0
-    sketch_flow_size = {} #v
-    sketch_cnt_err = 0 #v
-    sketch_size_err = 0 #v
-    sketch_mean_err = 0 #v
-    sketch_counter = 0 #v
-    priority_table_time = []
-    priority_table_size = []
-    packet_collision = [[[] for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] #v
-    flow_collision = [[[] for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] #v
-    pkt_collision_counter = 0 #v
-    flow_collision_counter = 0 #v
-    coflow_completion = {} # Coflow ID(key), Start Time, Completion Time, Duration Time, Coflow Size, Coflow Priority
+        # Table
+        self.priority_table = {} # (Match Table) Flow_ID(key), Priority #v
+        self.packet_count_table = [[0 for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
+        self.flow_size_table = [[0 for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] # (Sketch) Packet_Count #v
+        self.flow_record_table = {} # (in Controller) Flow_ID(key), Coflow_ID, Priority, Size, TTL, Arrival_Time, Size_m, Finish #v
+        self.coflow_priority_table = {} # (in Controller) Coflow_ID(key), Coflow_Size, Priority
+        # Other
+        self.DNN_counter = 0
+        self.DNN_right = 0
+        self.sketch_flow_size = {} #v
+        self.sketch_cnt_err = 0 #v
+        self.sketch_size_err = 0 #v
+        self.sketch_mean_err = 0 #v
+        self.sketch_counter = 0 #v
+        self.priority_table_time = []
+        self.priority_table_size = []
+        self.packet_collision = [[[] for i in range(PACKET_CNT_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] #v
+        self.flow_collision = [[[] for i in range(FLOW_SIZE_TABLE_SIZE)] for j in range(SKETCH_DEPTH)] #v
+        self.pkt_collision_counter = 0 #v
+        self.flow_collision_counter = 0 #v
+        self.coflow_completion = {} # Coflow ID(key), Start Time, Completion Time, Duration Time, Coflow Size, Coflow Priority
 
 def readDataSet():
     global fb_data, fb_coflow_size, fb_coflow_priority
@@ -447,7 +448,7 @@ def updateFlowRecordTable(switches, switch, f_id, c_list, packet):
             switch.flow_record_table[f_id][5] = packet_m
         arrival_t = switch.flow_record_table[f_id][4]
         c_id = classify(switch, f_id, packet, packet_m, arrival_t)
-        inter_classify_cid = classify(switches[1-switches.index(switch)], f_id, packet, packet_m, arrival_t)
+        #inter_classify_cid = classify(switches[1-switches.index(switch)], f_id, packet, packet_m, arrival_t)
 
         #label manually with some error probability
         #c_id = label(packet, c_list, 80)
@@ -484,6 +485,7 @@ def updateFlowRecordTable(switches, switch, f_id, c_list, packet):
             print("(Priority Table) Overflow")
             # Todo
         
+        '''
         #calculate major and minor classify accuracy via groundtruth
         major_groundtruth = groundtruth(switch, packet[0]) #input real coflow id to find groundtruth
         minor_groundtruth = groundtruth(switches[1-switches.index(switch)], packet[0])
@@ -491,6 +493,7 @@ def updateFlowRecordTable(switches, switch, f_id, c_list, packet):
         print("minor_groundtruth: ", minor_groundtruth)
         print("major accuracy =", major_groundtruth[c_id]/sum(major_groundtruth.values())*100, "%")
         print("minor accuracy =", minor_groundtruth[inter_classify_cid]/sum(minor_groundtruth.values())*100, "%")
+        '''
 
 def schedule(table):
     for c_id in table.keys():
@@ -611,10 +614,10 @@ if __name__ == "__main__":
     print(len(c_list), " coflows, ", len(f_id_list), " flows and ", len(input_queue), " packets")
 
     #sampling
-    sample_limit = 300000
-    sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(30)
+    sample_limit = 100000
+    sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(input_queue, input_data_flow, f_id_list, c_list, 10)
     while len(sample_input_queue)>sample_limit:
-        sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(30)
+        sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list = sampling(input_queue, input_data_flow, f_id_list, c_list, 10)
     print("After sampling: ")
     print(len(sample_c_list), " coflows, ", len(sample_f_id_list), " flows and ", len(sample_input_queue), " packets")
 
@@ -622,29 +625,21 @@ if __name__ == "__main__":
     switches=[]
     numOfSwitches = 2
     for i in range(numOfSwitches):
-        newswitch = Switch()
-        switches.append(newswitch)
-    #switches = grouping(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, numOfSwitches)
-    switches, shuffle_cid_list = grouping2(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list, numOfSwitches)
+        switches.append(Switch())
+    switches = grouping(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, numOfSwitches)
+    #switches, shuffle_cid_list = grouping2(switches, sample_input_queue, sample_input_data_flow, sample_f_id_list, sample_c_list, numOfSwitches)
     for switch in switches:
         print(len(switch.input_queue))
-    for cid_list in shuffle_cid_list:
-        print("switch", shuffle_cid_list.index(cid_list), ": ", cid_list)
 
     packet_index=-1
     while True:
         counter+=1
         packet_index+=1
-        done_switches = []
-        notdone_switches = []
+        done=0
         for switch in switches:
             if counter >= len(switch.input_queue) and switch.wait_queue.qsize() == 0:
-                done_switches.append(switch)
-            else:
-                notdone_switches.append(switch)
-        if not notdone_switches:
-            break
-        for switch in notdone_switches:
+                done+=1
+                continue
             if packet_index < len(switch.input_queue):
                 this_packet = list(switch.input_queue[packet_index])
                 f_id = getFlowID(this_packet, sample_f_id_list)
@@ -682,6 +677,8 @@ if __name__ == "__main__":
                 print("len of wait queue: ", len(switch.wait_queue.queue))
             # Update TTL
             controllerUpdateTTL(switch, f_id)
+        if done==numOfSwitches:
+            break    
     print("All switches complete")
     # ------ Record ------
     for switch in switches:
