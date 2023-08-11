@@ -8,7 +8,9 @@ import ast
 import networkx as nx
 from networkx.algorithms import bipartite
 
-data = pd.read_csv("P4_RECORD/Coflow_Priority_Result_2switch_30coflow_232508packets.csv")
+'''
+filename = "Coflow_Priority_Result_2switch_30coflow_296119packets"
+data = pd.read_csv("P4_RECORD/" + filename + ".csv")
 timer = []
 global_priority = []
 local_priority = []
@@ -104,11 +106,30 @@ for i in range(len(timer)):
         current_mapping_correctness.append(correct/total*100)
     mapping_correctness.append(current_mapping_correctness)
     print("current mapping currectness:", current_mapping_correctness)
-
+'''
+'''
+local_correctness_average = []
+mapping_correctness_average = []
+arrival_percentage = []
 for i in range(len(timer)):
     print("local correctness:", local_correctness[i])
     print("mapping correctness:", mapping_correctness[i])
+    local_correctness_average.append(sum(local_correctness[i])/len(local_correctness[i]))
+    mapping_correctness_average.append(sum(mapping_correctness[i])/len(mapping_correctness[i]))
+    arrival_percentage.append(timer[i]/timer[-1]*100)
 
+plt.plot(arrival_percentage, local_correctness_average, 'go--')
+plt.plot(arrival_percentage, mapping_correctness_average, 'ro-')
+plt.legend(['avg local correctness', 'avg mapping correctness'])
+plt.title('Priority Accuracy (%)')
+plt.xlabel('Input Arrival Percentage (%)')
+plt.ylabel('Accuracy (%)')
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['top'].set_visible(False)
+plt.grid(linestyle='--')
+plt.savefig("plt/" + filename + "_average.png")
+'''
+'''
 bar = []
 for i in range(len(local_correctness)):
     tmp = []
@@ -132,12 +153,13 @@ df.plot(x='Timer',
         title='Priority Accuracy')
 plt.xlabel("Timer")
 plt.ylabel("Accuracy (%)")
-plt.savefig("plt/Coflow_Priority_Result_2switch_30coflow_232508packets.png")
-
+plt.savefig("plt/" + filename + ".png")
+'''
+'''
 #top k
 print("--------------top k ----------------")
-local_correctness = []
-mapping_correctness = []
+local_correctness_topk = []
+mapping_correctness_topk = []
 k = 0.5
 for i in range(len(timer)):
     correct_answer = global_priority[i]
@@ -163,7 +185,7 @@ for i in range(len(timer)):
                     correct += 1
                 y+=1
         current_local_correctness.append(correct/total*100)
-    local_correctness.append(current_local_correctness)
+    local_correctness_topk.append(current_local_correctness)
     print("current local correctness(top k):", current_local_correctness)
 
     current_mapping_correctness = []
@@ -183,20 +205,37 @@ for i in range(len(timer)):
                     correct += 1
                 y+=1
         current_mapping_correctness.append(correct/total*100)
-    mapping_correctness.append(current_mapping_correctness)
+    mapping_correctness_topk.append(current_mapping_correctness)
     print("current mapping currectness(top k):", current_mapping_correctness)
 
+local_correctness_average_topk = []
+mapping_correctness_average_topk = []
+arrival_percentage = []
 for i in range(len(timer)):
-    print("local correctness(top k):", local_correctness[i])
-    print("mapping correctness(top k):", mapping_correctness[i])
+    print("local correctness(top k):", local_correctness_topk[i])
+    print("mapping correctness(top k):", mapping_correctness_topk[i])
+    local_correctness_average_topk.append(sum(local_correctness_topk[i])/len(local_correctness_topk[i]))
+    mapping_correctness_average_topk.append(sum(mapping_correctness_topk[i])/len(mapping_correctness_topk[i]))
+    arrival_percentage.append(timer[i]/timer[-1]*100)
+
+plt.plot(arrival_percentage, local_correctness_average_topk, 'go--')
+plt.plot(arrival_percentage, mapping_correctness_average_topk, 'ro-')
+plt.legend(['avg local correctness', 'avg mapping correctness'])
+plt.title('Top K Priority Accuracy (avg)')
+plt.xlabel('Input Arrival Percentage (%)')
+plt.ylabel('Accuracy (%)')
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['top'].set_visible(False)
+plt.grid(linestyle='--')
+plt.savefig("plt/" + filename + "_topk_average.png")
 
 bar = []
-for i in range(len(local_correctness)):
+for i in range(len(local_correctness_topk)):
     tmp = []
     tmp.append(timer[i])
-    for correctness in local_correctness[i]:
+    for correctness in local_correctness_topk[i]:
         tmp.append(correctness)
-    for correctness in mapping_correctness[i]:
+    for correctness in mapping_correctness_topk[i]:
         tmp.append(correctness)
     bar.append(tmp)
 print("final bar(top k):", bar)
@@ -213,8 +252,11 @@ df.plot(x='Timer',
         title='Priority Accuracy(top k)')
 plt.xlabel("Timer")
 plt.ylabel("Accuracy (%)")
-plt.savefig("plt/Coflow_Priority_Result_2switch_30coflow_232508packets_topk.png")
-
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['top'].set_visible(False)
+plt.savefig("plt/" + filename + "_topk.png")
+'''
+'''
 #distance
 print("--------------distance---------------")
 local_distance = []
@@ -258,9 +300,25 @@ for i in range(len(timer)):
         current_mapping_distance.append(distance)
     mapping_distance.append(current_mapping_distance) 
 
+avg_local_distance = []
+avg_mapping_distance = []
+arrival_percentage = []
 for i in range(len(timer)):
     print("local distance:", local_distance[i])
     print("mapping distance:", mapping_distance[i])
+    avg_local_distance.append(sum(local_distance[i])/len(local_distance[i]))
+    avg_mapping_distance.append(sum(mapping_distance[i])/len(mapping_distance[i]))
+    arrival_percentage.append(timer[i]/timer[-1]*100)
+plt.plot(arrival_percentage, avg_local_distance, 'go--')
+plt.plot(arrival_percentage, avg_mapping_distance, 'ro-')
+plt.legend(['avg local distance', 'avg mapping distance'])
+plt.title('Avg Mapping Distance')
+plt.xlabel('Input Arrival Percentage (%)')
+plt.ylabel('Distance to Groundtruth (lower the better)')
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['top'].set_visible(False)
+plt.grid(linestyle='--')
+plt.savefig("plt/" + filename + "_distance_average.png")
 
 bar = []
 for i in range(len(local_distance)):
@@ -285,10 +343,12 @@ df.plot(x='Timer',
         title='Priority Difference Distance')
 plt.xlabel("Timer")
 plt.ylabel("Distance")
-plt.savefig("plt/Coflow_Priority_Result_2switch_30coflow_232508packets_distance.png")
+plt.savefig("plt/" + filename + "_distance.png")
 '''
+
+
 #coflowsize estimation bar graph
-data = pd.read_csv("P4_RECORD/CoflowSize_Estimation_Record_2switch_20coflow_324347packets_2.csv")
+data = pd.read_csv("P4_RECORD/CoflowSize_Estimation_Record_2switch_20coflow_203755packets_alpha=0.8.csv")
 timer = []
 global_size = []
 mapping_size = []
@@ -318,9 +378,13 @@ plt.bar(x+0.1, local1, width, color='green')
 plt.bar(x+0.3, local2, width, color='cyan')
 plt.xlabel("Timer")
 plt.ylabel("Size")
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['top'].set_visible(False)
+plt.grid(linestyle='--')
 plt.legend(["Global size", "Mapping size", "Local size 1", "Local size 2"])
-plt.savefig("plt/CoflowSize_Estimation_Record_2switch_20coflow_324347packets.png")
-'''
+plt.title('Coflow Estimation Size (⍺=0.8)')
+plt.savefig("plt/CoflowSize_Estimation_Record_2switch_20coflow_203755packets_alpha=0.8.png")
+
 '''
 #bipartite graph for mapping result
 G = nx.DiGraph()

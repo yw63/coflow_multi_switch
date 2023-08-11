@@ -15,9 +15,9 @@ INPUT_PATH = "./CSV/"
 INPUT_FBFILE_PATH = "./FB2010-1Hr-150-0.txt"
 INPUT_MODEL = "./Coflow_model_select.h5"
 INPUT_MINMAX = "./min_max.json"
-OUTPUT_CSV = "./P4_RECORD/sampleAndLabel_priority_table_size.csv"
-OUTPUT_ACCURACY = "./P4_RECORD/sampleAndLabel_classify_record.csv"
-OUTPUT_COMPLETION_TIME = "./P4_RECORD/sampleAndLabel_coflow_completion_time.csv"
+OUTPUT_CSV = "./P4_RECORD/sampleAndLabel_priority_table_size"
+OUTPUT_ACCURACY = "./P4_RECORD/sampleAndLabel_classify_record"
+OUTPUT_COMPLETION_TIME = "./P4_RECORD/sampleAndLabel_coflow_completion_time"
 
 
 with open(INPUT_MINMAX) as file_object:
@@ -320,7 +320,7 @@ def updateFlowSizeTable(switch, f_id, packet):
     # Record
     return size
 
-def normalize(f_id2, packet_m, arrival_t):
+def normalize(switch, f_id2, packet_m, arrival_t):
     feature_time = abs(arrival_t - switch.flow_record_table[f_id2][4]) / (max_data[0]-min_data[0])
     normalize_packet1 = (packet_m - min_data[1]) / (max_data[1] - min_data[1])
     normalize_packet2 = (switch.flow_record_table[f_id2][5] - min_data[1]) / (max_data[1] - min_data[1])
@@ -343,7 +343,7 @@ def classify(switch, f_id, packet, packet_m, arrival_t):
         for j in sampleList: # Each flow in coflow
             if switch.coflow_queue[sorted_coflow_keys[i]][0][j] not in switch.flow_record_table.keys():
                 continue
-            n = normalize(switch.coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
+            n = normalize(switch, switch.coflow_queue[sorted_coflow_keys[i]][0][j], packet_m, arrival_t)
             predict_prob = MODEL.predict(n)
             predict_classes = predict_prob[0]
             sameScore[i] += predict_classes[1]
