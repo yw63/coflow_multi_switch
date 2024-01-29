@@ -8,8 +8,8 @@ import ast
 import networkx as nx
 from networkx.algorithms import bipartite
 
-'''
-filename = "Coflow_Priority_Result_2switch_30coflow_296119packets"
+
+filename = "Coflow_Priority_Result_2switch_50coflow_649946packets_alpha=0.6"
 data = pd.read_csv("P4_RECORD/" + filename + ".csv")
 timer = []
 global_priority = []
@@ -62,6 +62,7 @@ for ind in data.index:
     print("current local priority =", local_priority_current)
     local_priority.append(local_priority_current)
 
+
 print("------------------------------")
 local_correctness = []
 mapping_correctness = []
@@ -106,8 +107,8 @@ for i in range(len(timer)):
         current_mapping_correctness.append(correct/total*100)
     mapping_correctness.append(current_mapping_correctness)
     print("current mapping currectness:", current_mapping_correctness)
-'''
-'''
+
+
 local_correctness_average = []
 mapping_correctness_average = []
 arrival_percentage = []
@@ -128,7 +129,7 @@ plt.gca().spines['right'].set_visible(False)
 plt.gca().spines['top'].set_visible(False)
 plt.grid(linestyle='--')
 plt.savefig("plt/" + filename + "_average.png")
-'''
+
 '''
 bar = []
 for i in range(len(local_correctness)):
@@ -228,7 +229,8 @@ plt.gca().spines['right'].set_visible(False)
 plt.gca().spines['top'].set_visible(False)
 plt.grid(linestyle='--')
 plt.savefig("plt/" + filename + "_topk_average.png")
-
+'''
+'''
 bar = []
 for i in range(len(local_correctness_topk)):
     tmp = []
@@ -319,7 +321,8 @@ plt.gca().spines['right'].set_visible(False)
 plt.gca().spines['top'].set_visible(False)
 plt.grid(linestyle='--')
 plt.savefig("plt/" + filename + "_distance_average.png")
-
+'''
+'''
 bar = []
 for i in range(len(local_distance)):
     tmp = []
@@ -348,43 +351,64 @@ plt.savefig("plt/" + filename + "_distance.png")
 
 
 #coflowsize estimation bar graph
-data = pd.read_csv("P4_RECORD/CoflowSize_Estimation_Record_2switch_20coflow_203755packets_alpha=0.8.csv")
+'''
+data = pd.read_csv("P4_RECORD/CoflowSize_Estimation_Record_2switch_30coflow_422298packets_alpha=0.5.csv")
 timer = []
-global_size = []
-mapping_size = []
-local1 = []
-local2 = []
+global_groundtruth = []
+global_estimation = []
+local_groundtruth1 = []
+local_groundtruth2 = []
+local_estimation1 = []
+local_estimation2 = []
 for ind in data.index:
     timer.append(data["timer"][ind])
-    global_size.append(float(data["global size"][ind]))
-    mapping_size.append(float(data["mapping size"][ind]))
-    tmp = data["local sizes"][ind][1:-1]
+    global_groundtruth.append(float(data["global groundtruth"][ind]))
+    global_estimation.append(float(data["global estimation"][ind]))
+    tmp = data["local estimation"][ind][1:-1]
     tmp_list = tmp.split(',')
     item1 = float(tmp_list[0])
     item2 = float(tmp_list[1])
-    local1.append(item1)
-    local2.append(item2)
+    local_estimation1.append(item1)
+    local_estimation2.append(item2)
+    tmp2 = data["local groundtruth"][ind][1:-1]
+    tmp_list2 = tmp2.split(',')
+    item1 = float(tmp_list2[0])
+    item2 = float(tmp_list2[1])
+    local_groundtruth1.append(item1)
+    local_groundtruth2.append(item2)
+
 print("timer = ", timer)
-print("global size = ", global_size)
-print("mapping size = ", mapping_size)
-print("local1 = ", local1)
-print("local2 = ", local2)
+print("global groundtruth = ", global_groundtruth)
+print("global estimation = ", global_estimation)
+print("local groundtruth1 = ", local_groundtruth1)
+print("local groundtruth2 = ", local_groundtruth2)
+print("local estimation1 = ", local_estimation1)
+print("local estimation2 = ", local_estimation2)
 
-x = np.arange(len(timer))
-width = 0.2
-plt.bar(x-0.3, global_size, width, color='red')
-plt.bar(x-0.1, mapping_size, width, color='orange')
-plt.bar(x+0.1, local1, width, color='green')
-plt.bar(x+0.3, local2, width, color='cyan')
-plt.xlabel("Timer")
-plt.ylabel("Size")
-plt.gca().spines['right'].set_visible(False)
-plt.gca().spines['top'].set_visible(False)
-plt.grid(linestyle='--')
-plt.legend(["Global size", "Mapping size", "Local size 1", "Local size 2"])
-plt.title('Coflow Estimation Size (⍺=0.8)')
-plt.savefig("plt/CoflowSize_Estimation_Record_2switch_20coflow_203755packets_alpha=0.8.png")
-
+start = 0
+end = 5
+count = 0
+while end<=len(global_groundtruth):
+    x = np.arange(len(timer[start:end]))
+    width = 0.16
+    plt.bar(x-0.4, global_groundtruth[start:end], width, color='red')
+    plt.bar(x-0.24, global_estimation[start:end], width, color='orange')
+    plt.bar(x-0.08, local_groundtruth1[start:end], width, color='purple')
+    plt.bar(x+0.08, local_groundtruth2[start:end], width, color='violet')
+    plt.bar(x+0.24, local_estimation1[start:end], width, color='midnightblue')
+    plt.bar(x+0.4, local_estimation2[start:end], width, color='lightskyblue')
+    plt.xlabel("Timer")
+    plt.ylabel("Size")
+    plt.gca().spines['right'].set_visible(False)
+    plt.gca().spines['top'].set_visible(False)
+    plt.grid(linestyle='--')
+    plt.legend(["Global groundtruth", "Global estimation", "Local groundtruth(major)", "Local groundtruth(minor)", "Local estimation(major)", "Local estiamtion(minor)"])
+    plt.title('Coflow Estimation Size (⍺=0.5)')
+    plt.savefig("plt/CoflowSize_Estimation_Record_2switch_30coflow_422298packets_alpha=0.5_partial"+str(count)+".png")
+    start+=5
+    end += 5
+    count+=1
+'''
 '''
 #bipartite graph for mapping result
 G = nx.DiGraph()
